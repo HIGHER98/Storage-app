@@ -11,9 +11,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,7 +36,32 @@ Make handlers for:
 	Download file
 */
 
+func dbConn() (db *sql.DB) {
+	dbDriver := "mysql"
+	dbUsername := "storageGo"
+	dbPassword := "password1234"
+	dbName := "StorageApp"
+	db, err := sql.Open(dbDriver, dbUsername+":"+dbPassword+"@tcp(127.0.0.1:3306)/"+dbName)
+	if err != nil {
+		panic(err.Error())
+	}
+	return db
+}
+
+func redirect(w http.ResponseWriter, r *http.Request) {
+	// remove/add not default ports from r.Host
+	target := "https://" + r.Host + r.URL.Path
+	if len(r.URL.RawQuery) > 0 {
+		target += "?" + r.URL.RawQuery
+	}
+	log.Printf("redirect to: %s", target)
+	http.Redirect(w, r, target,
+		// see @andreiavrammsd comment: often 307 > 301
+		http.StatusTemporaryRedirect)
+}
+
 func viewHandler(w http.ResponseWriter, r *http.Request) {
+
 }
 
 func downloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +149,28 @@ func authenticateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(403), http.StatusForbidden)
 		return
 	}
-	fmt.Fprintln(w, "Sucessfully authenticated")
+	//fmt.Fprintln(w, "Sucessfully authenticated")
+
+	//Cookie stuff
+	//	sessionToken := uuid.NewV4().String()
+	sessionToken, er := uuid.NewV4()
+	if er != nil {
+		http.Error(w, http.StatusText(500), http.StatusInternalServerError)
+	}
+	/*	_, err = Cache.Do("SETEX", sessionToken, "120", username)
+		if err != nil {
+			http.Error(w, http.StatusText(500)+". Error caching cookie. ", http.StatusInternalServerError)
+			return
+		}
+	*/
+	http.SetCookie(w, &http.Cookie{
+		Name:    "session_token",
+		Value:   sessionToken.String(),
+		Expires: time.Now().Add(120 * time.Second),
+	})
+	http.Redirect(w, r, "http://localhost:12345/signup/", http.StatusAccepted)
+	fmt.Println("Redirected...")
+	fmt.Println("Sucessfully authenticated")
 }
 
 //Url: https://localhost:12345/view/SHA256_output_of_username
@@ -143,29 +192,19 @@ func makeHandler(fn func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 		fn(w, r)
 	}
 }
-func dbConn() (db *sql.DB) {
-	dbDriver := "mysql"
-	dbUsername := "storageGo"
-	dbPassword := "password1234"
-	dbName := "StorageApp"
-	db, err := sql.Open(dbDriver, dbUsername+":"+dbPassword+"@tcp(127.0.0.1:3306)/"+dbName)
-	if err != nil {
-		panic(err.Error())
-	}
-	return db
+func index(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./html_files/index.html")
 }
 func main() {
-	http.Handle("/", http.FileServer(http.Dir("./html_files/")))
-	// http.RedirectHandler("https://localhost:12345/login", 301))
+	go http.ListenAndServe(":12345", makeHandler(redirect))
+	http.Handle("/", makeHandler(index))
 	http.Handle("/signup/", http.StripPrefix("/signup/", http.FileServer(http.Dir("./html_files/"))))
 	http.HandleFunc("/signup", makeHandler(signupHandler))
-
 	http.HandleFunc("/authenticate", makeHandler(authenticateHandler))
 	http.HandleFunc("/login/", makeHandler(loginHandler))
 	http.HandleFunc("/view/", makeHandler(viewHandler))
 	http.HandleFunc("/download/", makeHandler(downloadHandler))
 	http.HandleFunc("/upload/", makeHandler(uploadHandler))
 	http.Handle("/favicon.ico", http.NotFoundHandler())
-	http.ListenAndServe(":12345", nil)
-	//	log.Fatal(http.ListenAndServeTLS(":12345", "cert.pem", "key.pem", nil))
+	log.Fatal(http.ListenAndServeTLS(":12345", "cert.pem", "key.pem", nil))
 }
